@@ -74,11 +74,7 @@ buildScraper()
     echo "" >> "$outdir"/index.yml
 }
 
-# find all yml files in ./scrapers - these are packages individually
-for f in ./scrapers/*.yml; do 
-    buildScraper "$f"
-done
-
+# handle scrapers, there are no XPath scrapers in this repo
 find ./scrapers/ -mindepth 2 -name *.yml -print0 | while read -d $'\0' f; do
     buildScraper "$f"
 done
