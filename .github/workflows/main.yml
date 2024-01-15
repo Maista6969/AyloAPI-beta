@@ -1,0 +1,40 @@
+name: Deploy index to Github Pages
+
+on:
+  push:
+    branches: [ master ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout master
+      uses: actions/checkout@v2
+      with:
+        path: master
+        ref: master
+        fetch-depth: '0'
+    - run: |
+        cd master
+        ./build_site.sh ../_site/
+    - uses: actions/upload-pages-artifact@v2
+    
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2

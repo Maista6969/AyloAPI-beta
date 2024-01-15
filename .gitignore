@@ -1,0 +1,5 @@
+# Scraper generated files
+*.json
+
+# Index build artifact
+/_site
