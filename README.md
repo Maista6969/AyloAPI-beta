@@ -10,6 +10,22 @@ This is arguably the biggest scraper in the repo and covers a _lot_ of networks 
 | Source URL | `https://maista6969.github.io/AyloAPI-beta/index.yml` |
 | Local Path | `AyloAPI-beta`                                        |
 
+Note that this scraper cover several sites that already have scrapers in the CommunityScrapers repo and you
+may need to uninstall those to get Stash to use this one instead. Note that since the goal is to replace these
+any cases where the new scraper is worse than the old one in any way should be considered a bug!
+
+This is a list of conflicting scrapers:
+
+| Community (stable) | AyloAPI-beta       |
+| ------------------ | ------------------ |
+| BangBros           | BangBros           |
+| Brazzers           | Brazzers           |
+| Deviante           | Deviante           |
+| Deviante Network   | Deviante           |
+| MindGeek           | almost all of them |
+| MindGeekAPI        | all of them        |
+| Twistys            | Twistys            |
+
 ## Design goals:
 
 - Easy to modify and understand: documentation, examples, tests?
