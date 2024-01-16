@@ -146,9 +146,41 @@ def get_studio(api_object: dict) -> ScrapedStudio | None:
     return None
 
 
+# These tag IDs appear to be neutral but are actually gendered
+# so we can map them to their gender-specific counterparts
+# Big thanks to AdultSun for these!
+tags_map = {
+    107: "White Woman",
+    112: "Black Woman",
+    113: "European Woman",
+    121: "Latina Woman",
+    125: "Black Hair (Female)",
+    126: "Blond Hair (Female)",
+    127: "Brown Hair (Female)",
+    128: "Red Hair (Female)",
+    215: "Rimming Him",
+    274: "Rimming Her",
+    374: "Black Man",
+    376: "European Man",
+    377: "Latino Man",
+    378: "White Man",
+    379: "Black Hair (Male)",
+    380: "Blond Hair (Male)",
+    381: "Brown Hair (Male)",
+    383: "Red Hair (Male)",
+    385: "Shaved Head",
+    386: "Short Hair (Male)",
+}
+
+
+def get_tag(api_object: dict) -> ScrapedTag:
+    mapped_tag = tags_map.get(api_object["id"], api_object["name"].strip())
+    return {"name": mapped_tag}
+
+
 def get_tags(api_object: dict) -> list[ScrapedTag]:
     tags = api_object.get("tags", [])
-    return [{"name": x["name"].strip()} for x in tags if "name" in x]
+    return [get_tag(x) for x in tags if "name" in x or x.get("id") in tags_map.keys()]
 
 
 state_map = {
