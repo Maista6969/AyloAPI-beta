@@ -475,8 +475,8 @@ def to_scraped_scene(scene_from_api: dict) -> ScrapedScene:
             scene["markers"] = [to_marker(m) for m in markers]
         else:
             log.debug(
-                f"This scene has {len(markers)} markers"
-                " but scraping markers hasn't been implemented yet"
+                f"This scene has {len(markers)} markers,"
+                " you can enable scraping them in config.ini"
             )
 
     return scene

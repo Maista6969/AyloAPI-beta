@@ -13,19 +13,13 @@ def get_config(default: str | None = None) -> "CustomConfig":
     The default config must have the same format as a simple .ini config file consisting of
     key-value pairs separated by an equals sign, and can optionally contain comments and blank lines
     for readability
-
-    If a script is calling another script, this will merge all config files in the stack
-    Example: Scraping a scene with Brazzers, which has `scrape_markers = True` in its config
-    while AyloAPI has `scrape_markers = False` in its config
-
-    Brazzers/Brazzers.py calls AyloAPI/scrape.py
-    The config for Brazzers has higher precedence than the config for AyloAPI,
-    so the final config will have scrape_markers = True
     """
     config = CustomConfig(default)
     if not default:
         log.warning("No config specified")
         return config
+
+    # Note: chained configs were removed until we find a use case for them
 
     # The paths of every script in the callstack: in the above example this would be:
     # this script                    the api script              the site script
@@ -47,24 +41,16 @@ def get_config(default: str | None = None) -> "CustomConfig":
     current_path = Path(paths[1]).absolute()
     prefix = str(Path(current_path.parent.name, current_path.name))
 
-    # Skip the py_common util file: we don't want to mess with this config
-    # Path("/scrapers/api/config.ini"), Path("/scrapers/site/config.ini")
     configs = [Path(p).parent / ("config.ini") for p in paths][1:]
 
-    # Update our config with the values from each config file, so that the
-    # most specific config overrides the more general ones
-    # /scrapers/site/config.ini is more specific than /scrapers/api/config.ini
-    for config_path in configs:
-        if config_path.exists():
-            log.debug(f"[{prefix}] Reading config from {config_path}")
-            config.update(config_path.read_text())
-        else:
-            log.debug(f"[{prefix}] Creating default config at {config_path}")
-            config_path.write_text(str(config))
-        if "py_common" in config_path.parts:
-            # Other modules in py_common can call this
-            # but they shouldn't merge configs
-            break
+    # See git history if you want the chained configs version
+    config_path = configs[0]
+    if not config_path.exists():
+        log.debug(f"[{prefix}] First run, creating default config at {config_path}")
+        config_path.write_text(str(config))
+    else:
+        log.debug(f"[{prefix}] Reading config from {config_path}")
+        config.update(config_path.read_text())
 
     return config
 
