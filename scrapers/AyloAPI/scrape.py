@@ -2,55 +2,101 @@ import json
 import re
 import sys
 import difflib
+import requests
 from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-try:
-    import requests
-except ModuleNotFoundError:
-    print(
-        "You need to install the requests module."
-        "(https://docs.python-requests.org/en/latest/user/install/)\n"
-        "If you have pip (normally installed with python),"
-        "run this command in a terminal (cmd): python -m pip install requests",
-        file=sys.stderr,
-    )
-    sys.exit()
+import py_common.log as log
+from py_common.util import dig, scraper_args
+from py_common.config import get_config
+from py_common.types import (
+    ScrapedScene,
+    ScrapedMovie,
+    ScrapedPerformer,
+    ScrapedStudio,
+    ScrapedTag,
+)
+import AyloAPI.domains as domains
+from AyloAPI.slugger import slugify
 
+config = get_config(
+    default="""
+# User Agent to use for the requests
+user_agent = Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:79.0) Gecko/20100101 Firefox/79.0
 
-try:
-    import py_common.log as log
-    from py_common.util import dig, scraper_args
-    from py_common.types import (
-        ScrapedScene,
-        ScrapedMovie,
-        ScrapedPerformer,
-        ScrapedStudio,
-        ScrapedTag,
-    )
-    import AyloAPI.domains as domains
-    import AyloAPI.config as config
-    from AyloAPI.slugger import slugify
-except ModuleNotFoundError:
-    print(
-        "You need to download the folder 'py_common' from the community repo! "
-        "(CommunityScrapers/tree/master/scrapers/py_common)",
-        file=sys.stderr,
-    )
-    sys.exit()
+# Scrape markers when using 'Scrape with...'
+scrape_markers = False
+
+# Minimum similarity ratio to consider a match when searching
+minimum_similarity = 0.75
+"""
+)
 
 
 def default_postprocess(obj: Any, _) -> Any:
     return obj
 
 
+## Temporary function to add markers to scenes, remove when/if Stash gets native support
+def add_markers(scene_id: str, markers: list[dict]):
+    from itertools import tee, filterfalse
+
+    def partition(pred, iterable):
+        t1, t2 = tee(iterable)
+        return list(filter(pred, t2)), list(filterfalse(pred, t1))
+
+    from py_common.graphql import callGraphQL
+
+    def format_time(seconds: int) -> str:
+        if seconds > 3600:
+            return f"{seconds // 3600}:{(seconds // 60) % 60:02}:{seconds % 60:02}"
+        return f"{(seconds // 60) % 60}:{seconds % 60:02}"
+
+    raw_tags = callGraphQL("query allTags { allTags { name id aliases } }")
+    tags = {tag["name"].lower(): tag["id"] for tag in raw_tags["allTags"]}
+    tags |= {
+        alias.lower(): tag["id"]
+        for tag in raw_tags["allTags"]
+        for alias in tag["aliases"]
+    }
+    existing_markers = callGraphQL(
+        "query FindScene($id: ID!){ findScene(id: $id) { scene_markers { title seconds } } }",
+        {"id": scene_id},
+    )["findScene"]["scene_markers"]
+
+    valid, invalid = partition(lambda m: m["name"].lower() in tags, markers)
+    if invalid:
+        invalid_tags = ", ".join({m["name"] for m in invalid})
+        log.debug(f"Skipping {len(invalid)} markers, tags do not exist: {invalid_tags}")
+
+    log.debug(f"Adding {len(valid)} out of {len(markers)} markers to scene {scene_id}")
+    create_query = "mutation SceneMarkerCreate($input: SceneMarkerCreateInput!) { sceneMarkerCreate(input: $input) {id}}"
+    for marker in sorted(valid, key=lambda m: m["seconds"]):
+        name = marker["name"]
+        seconds = marker["seconds"]
+        if any(m["seconds"] == marker["seconds"] for m in existing_markers):
+            log.debug(
+                f"Skipping marker '{name}' at {format_time(seconds)} because it already exists"
+            )
+            continue
+        variables = {
+            "input": {
+                "title": name,
+                "primary_tag_id": tags[name.lower()],
+                "seconds": int(seconds),
+                "scene_id": scene_id,
+                "tag_ids": [],
+            }
+        }
+        callGraphQL(create_query, variables)
+        log.debug(f"Added marker '{name}' at {format_time(seconds)}")
+
+
 # network stuff
 def __raw_request(url, headers) -> requests.Response:
     log.trace(f"Sending GET request to {url}")
-    response = requests.get(
-        url, headers=headers, timeout=10, verify=config.CHECK_SSL_CERT
-    )
+    response = requests.get(url, headers=headers, timeout=10)
 
     if response.status_code == 429:
         log.error(
@@ -73,8 +119,8 @@ def __api_request(url: str, headers: dict) -> dict | None:
         log.error(f"Errors from API:\n{api_search_errors}")
         return None
 
-    with open("api_response.json", "w", encoding="utf-8") as f:
-        json.dump(api_response, f, indent=2)
+    # with open("api_response.json", "w", encoding="utf-8") as f:
+    #     json.dump(api_response, f, indent=2)
 
     return api_response["result"]
 
@@ -82,7 +128,7 @@ def __api_request(url: str, headers: dict) -> dict | None:
 def _create_headers_for(domain: str) -> dict[str, str]:
     # If we haven't stored a token we must provide a function to get one
     def get_instance_token(url: str) -> str | None:
-        r = __raw_request(url, {"User-Agent": config.USER_AGENT})
+        r = __raw_request(url, {"User-Agent": config.user_agent})
         if r and (token := r.cookies.get("instance_token")):
             return token
         log.error(
@@ -97,7 +143,7 @@ def _create_headers_for(domain: str) -> dict[str, str]:
 
     api_headers = {
         "Instance": api_token,
-        "User-Agent": config.USER_AGENT,
+        "User-Agent": config.user_agent,
         "Origin": f"https://{domain}",
         "Referer": f"https://{domain}",
     }
@@ -146,9 +192,8 @@ def get_studio(api_object: dict) -> ScrapedStudio | None:
     return None
 
 
-# These tag IDs appear to be neutral but are actually gendered
-# so we can map them to their gender-specific counterparts
-# Big thanks to AdultSun for these!
+# As documented by AdultSun, these tag IDs appear to be neutral but
+# are actually gendered so we can map them to their gender-specific counterparts
 tags_map = {
     107: "White Woman",
     112: "Black Woman",
@@ -173,14 +218,21 @@ tags_map = {
 }
 
 
-def get_tag(api_object: dict) -> ScrapedTag:
+def to_tag(api_object: dict) -> ScrapedTag:
     mapped_tag = tags_map.get(api_object["id"], api_object["name"].strip())
     return {"name": mapped_tag}
 
 
-def get_tags(api_object: dict) -> list[ScrapedTag]:
+def to_tags(api_object: dict) -> list[ScrapedTag]:
     tags = api_object.get("tags", [])
-    return [get_tag(x) for x in tags if "name" in x or x.get("id") in tags_map.keys()]
+    return [to_tag(x) for x in tags if "name" in x or x.get("id") in tags_map.keys()]
+
+
+def to_marker(api_object: dict) -> dict:
+    return {
+        **to_tag(api_object),
+        "seconds": api_object["startTime"],
+    }
 
 
 state_map = {
@@ -346,7 +398,7 @@ def to_scraped_performer(
     ]:
         performer["images"] = images
 
-    if tags := get_tags(performer_from_api):
+    if tags := to_tags(performer_from_api):
         performer["tags"] = tags
 
     if site:
@@ -399,7 +451,7 @@ def to_scraped_scene(scene_from_api: dict) -> ScrapedScene:
             to_scraped_performer(p, dig(scene_from_api, "brand"))
             for p in scene_from_api["actors"]
         ],
-        "tags": get_tags(scene_from_api),
+        "tags": to_tags(scene_from_api),
     }
 
     if image := dig(
@@ -419,10 +471,13 @@ def to_scraped_scene(scene_from_api: dict) -> ScrapedScene:
         scene["studio"] = studio
 
     if markers := scene_from_api.get("timeTags"):
-        log.debug(
-            f"This scene has {len(markers)} markers"
-            " but scraping markers hasn't been implemented yet"
-        )
+        if config.scrape_markers:
+            scene["markers"] = [to_marker(m) for m in markers]
+        else:
+            log.debug(
+                f"This scene has {len(markers)} markers"
+                " but scraping markers hasn't been implemented yet"
+            )
 
     return scene
 
@@ -455,15 +510,15 @@ def scene_from_url(
     if not api_scene_json:
         return None
 
-    if dig(api_scene_json, "type") == "scene":
-        return postprocess(to_scraped_scene(api_scene_json), api_scene_json)
-
     # If you scrape a trailer we can still get the correct scene data
-    if dig(api_scene_json, "parent", "type") == "scene":
-        log.debug("Result is a movie or trailer, getting scene data from parent")
-        return postprocess(
-            to_scraped_scene(api_scene_json["parent"]), api_scene_json["parent"]
-        )
+    if (
+        dig(api_scene_json, "type") != "scene"
+        and dig(api_scene_json, "parent", "type") == "scene"
+    ):
+        log.debug("Result is a trailer, getting scene data from parent")
+        api_scene_json = api_scene_json["parent"]
+
+    return postprocess(to_scraped_scene(api_scene_json), api_scene_json)
 
 
 def performer_from_url(
@@ -840,7 +895,7 @@ def performer_search(
 def scene_from_fragment(
     fragment: dict,
     search_domains: list[str] | None = None,
-    min_ratio=config.SET_RATIO,
+    min_ratio=config.minimum_similarity,
     postprocess: Callable[[ScrapedScene, dict], ScrapedScene] = default_postprocess,
 ) -> ScrapedScene | None:
     """
@@ -860,6 +915,12 @@ def scene_from_fragment(
     if url := fragment.get("url"):
         log.debug(f"Using scene URL: '{url}'")
         if scene := scene_from_url(url, postprocess=postprocess):
+            if (
+                fragment["id"]
+                and config.scrape_markers
+                and (markers := scene.pop("markers", []))
+            ):
+                add_markers(fragment["id"], markers)
             return scene
         log.debug("Failed to scrape scene from URL")
     if title := fragment.get("title"):
